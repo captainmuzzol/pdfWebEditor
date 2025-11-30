@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title> PDF便捷编辑工具</title>
+    <title> 单位内网PDF便捷编辑器</title>
     <link rel="icon" type="image/png" href="/favicon.png">
     <!-- Basic styles for compatibility -->
     <style>
@@ -230,19 +230,7 @@
             transform: scale(4.3);
         }
 
-        .expand-btn {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            background: #ffc107;
-            color: #333;
-            border: 1px solid #e0a800;
-            border-radius: 4px;
-            padding: 2px 8px;
-            font-size: 12px;
-            cursor: pointer;
-            transform: scale(1.1);
-        }
+
 
         .rotate-btn {
             position: absolute;
@@ -332,8 +320,8 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1> PDF便捷编辑处理工具</h1>
-            <p>国产系统理案卷还不用我？</p>
+            <h1> 单位内网PDF便捷编辑器</h1>
+            <p>国产系统理案卷还不用我，那你是这个👍</p>
         </div>
 
         <div class="top-bar">
@@ -350,8 +338,11 @@
                     <div class="merge-holder" style="display: flex; align-items: center; gap: 8px; margin-left:auto;">
                         <div class="loader" id="loading-spinner"></div>
                         <button class="btn btn-warning" id="reverse-sort">反向排序</button>
-                        <button class="btn btn-danger" id="clear-btn">X 全部清空</button>
                         <button class="btn btn-merge" id="merge-btn" disabled>合并导出选中条目</button>
+                        <label style="display:flex;align-items:center;gap:6px;margin-left:8px;">
+                            <input type="checkbox" id="auto-delete-after-export" checked>
+                            <span style="color:#333;">导出后删除</span>
+                        </label>
                     </div>
                 </div>
                 <input type="file" id="file-input" webkitdirectory directory multiple style="display: none;">
@@ -422,7 +413,7 @@
         </div>
     </div>
 
-    <div class="footer-tip">加载失败？请换用谷歌浏览器或奇安信浏览器！</div>
+    <div class="footer-tip">加载失败？请换用谷歌浏览器或奇安信浏览器啊！</div>
     <script src="/js/app.js"></script>
 </body>
 

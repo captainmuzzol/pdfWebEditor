@@ -4,10 +4,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const singleFileInput = document.getElementById('single-file-input');
     const fileGrid = document.getElementById('file-grid');
     const mergeBtn = document.getElementById('merge-btn');
-    const clearBtn = document.getElementById('clear-btn');
     const selectAllBtn = document.getElementById('select-all-btn');
     const clearSelectedBtn = document.getElementById('clear-selected-btn');
     const reverseSortBtn = document.getElementById('reverse-sort');
+    const autoDeleteChk = document.getElementById('auto-delete-after-export');
     const spinner = document.getElementById('loading-spinner');
     const rotationMap = new Map();
 
@@ -53,12 +53,51 @@ document.addEventListener('DOMContentLoaded', () => {
         onEnd: updateMergeButtonState
     });
 
-    // Handle existing files (SSR)
-    document.querySelectorAll('.file-item').forEach(item => {
-        const url = item.dataset.url;
-        setInitialRotation(item);
-        generateThumbnail(item, url, undefined, getRotationForItem(item));
-    });
+    // Handle existing files (SSR) by auto-expanding into page items
+    (async function () {
+        const items = Array.from(document.querySelectorAll('.file-item'));
+        for (const item of items) {
+            const filename = item.dataset.id;
+            const url = item.dataset.url;
+            if (!filename || !url) continue;
+            try {
+                const nameEl = item.querySelector('.file-name');
+                const originalName = nameEl ? nameEl.textContent : '';
+                const index = Array.from(fileGrid.children).indexOf(item);
+                const loadingTask = pdfjsLib.getDocument(url);
+                const pdf = await loadingTask.promise;
+                const totalPages = pdf.numPages;
+                const fragment = document.createDocumentFragment();
+                for (let i = 1; i <= totalPages; i++) {
+                    const pageItem = document.createElement('div');
+                    pageItem.className = 'file-item';
+                    pageItem.dataset.source = filename;
+                    pageItem.dataset.page = String(i);
+                    pageItem.dataset.url = url;
+                    pageItem.innerHTML = `
+                        <div class="checkbox-container">
+                            <input type="checkbox" class="file-checkbox">
+                        </div>
+                        <div class="rotate-btn">旋转</div>
+                        <div class="thumbnail-container">
+                            <span style="color: #999; font-size: 12px;">生成中...</span>
+                        </div>
+                        <div class="file-name" title="${originalName} - 第 ${i} 页">${originalName} - 第 ${i} 页</div>
+                    `;
+                    fragment.appendChild(pageItem);
+                    setInitialRotation(pageItem);
+                    generateThumbnail(pageItem, url, i, getRotationForItem(pageItem));
+                }
+                fileGrid.insertBefore(fragment, fileGrid.children[index + 1] || null);
+                fileGrid.removeChild(item);
+            } catch (e) {
+                console.error('Error expanding SSR file into pages', e);
+                setInitialRotation(item);
+                generateThumbnail(item, url, undefined, getRotationForItem(item));
+            }
+        }
+        updateMergeButtonState();
+    })();
 
     // Drag and Drop Events
     dropZone.addEventListener('dragover', (e) => {
@@ -202,26 +241,39 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function appendFilesToGrid(files) {
-        files.forEach(file => {
-            const div = document.createElement('div');
-            div.className = 'file-item';
-            div.dataset.id = file.filename;
-            div.dataset.url = file.url;
-            div.innerHTML = `
-                <div class="checkbox-container">
-                    <input type="checkbox" class="file-checkbox">
-                </div>
-                <div class="rotate-btn">旋转</div>
-                <div class="thumbnail-container">
-                    <span style="color: #999; font-size: 12px;">生成中...</span>
-                </div>
-                <div class="file-name" title="${file.originalname}">${file.originalname}</div>
-            `;
-            fileGrid.appendChild(div);
-            setInitialRotation(div);
-            generateThumbnail(div, file.url, undefined, getRotationForItem(div));
-        });
+    async function appendFilesToGrid(files) {
+        for (const file of files) {
+            try {
+                const loadingTask = pdfjsLib.getDocument(file.url);
+                const pdf = await loadingTask.promise;
+                const totalPages = pdf.numPages;
+                const fragment = document.createDocumentFragment();
+                for (let i = 1; i <= totalPages; i++) {
+                    const pageItem = document.createElement('div');
+                    pageItem.className = 'file-item';
+                    pageItem.dataset.source = file.filename;
+                    pageItem.dataset.page = String(i);
+                    pageItem.dataset.url = file.url;
+                    pageItem.innerHTML = `
+                        <div class="checkbox-container">
+                            <input type="checkbox" class="file-checkbox">
+                        </div>
+                        <div class="rotate-btn">旋转</div>
+                        <div class="thumbnail-container">
+                            <span style="color: #999; font-size: 12px;">生成中...</span>
+                        </div>
+                        <div class="file-name" title="${file.originalname} - 第 ${i} 页">${file.originalname} - 第 ${i} 页</div>
+                    `;
+                    fragment.appendChild(pageItem);
+                    setInitialRotation(pageItem);
+                    generateThumbnail(pageItem, file.url, i, getRotationForItem(pageItem));
+                }
+                fileGrid.appendChild(fragment);
+                updateMergeButtonState();
+            } catch (e) {
+                console.error('Error expanding uploaded file into pages', e);
+            }
+        }
     }
 
     // Thumbnail Generation
@@ -297,15 +349,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
             thumbContainer.innerHTML = '';
             thumbContainer.appendChild(topCanvas);
-            if (!pageNumber && numPages > 1) {
-                const existing = container.querySelector('.expand-btn');
-                if (!existing) {
-                    const btn = document.createElement('div');
-                    btn.className = 'expand-btn';
-                    btn.textContent = '展开';
-                    container.appendChild(btn);
-                }
-            }
         } catch (error) {
             console.error('Error generating thumbnail:', error);
             const thumbContainer = container.querySelector('.thumbnail-container');
@@ -404,15 +447,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     fileGrid.addEventListener('click', async (e) => {
-        const expand = e.target.classList.contains('expand-btn');
         const rotate = e.target.classList.contains('rotate-btn');
         const thumb = e.target.closest('.thumbnail-container');
-        if (expand) {
-            const item = e.target.closest('.file-item');
-            const url = item.dataset.url;
-            await expandFileItem(item, url);
-            return;
-        }
         if (rotate) {
             const item = e.target.closest('.file-item');
             const key = getRotationKey(item);
@@ -431,19 +467,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    clearBtn.addEventListener('click', async () => {
-        if (!confirm('确定要清空所有文件吗？')) return;
 
-        try {
-            const response = await fetch('/clear', { method: 'POST' });
-            if (response.ok) {
-                fileGrid.innerHTML = '';
-                updateMergeButtonState();
-            }
-        } catch (error) {
-            console.error('Error clearing files:', error);
-        }
-    });
 
     function updateMergeButtonState() {
         const checkedCount = document.querySelectorAll('.file-checkbox:checked').length;
@@ -453,37 +477,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (clearSelectedBtn) {
         clearSelectedBtn.addEventListener('click', async () => {
-            const ids = new Set();
-            const items = Array.from(fileGrid.querySelectorAll('.file-item'));
-            items.forEach(item => {
-                const cb = item.querySelector('.file-checkbox');
-                if (cb && cb.checked) {
-                    const id = item.dataset.id || item.dataset.source;
-                    if (id) ids.add(id);
-                }
+            const allItems = Array.from(fileGrid.querySelectorAll('.file-item'));
+            const selected = allItems.filter(it => {
+                const cb = it.querySelector('.file-checkbox');
+                return cb && cb.checked;
             });
-            if (ids.size === 0) {
-                alert('未选择任何文件');
+            if (selected.length === 0) {
+                alert('未选择任何条目');
                 return;
             }
-            try {
-                const response = await fetch('/clear-selected', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ fileIds: Array.from(ids) })
-                });
-                if (response.ok) {
-                    const idsArr = Array.from(ids);
-                    const all = Array.from(fileGrid.querySelectorAll('.file-item'));
-                    all.forEach(item => {
-                        const id = item.dataset.id || item.dataset.source;
-                        if (idsArr.includes(id)) item.remove();
-                    });
-                    updateMergeButtonState();
-                }
-            } catch (error) {
-                console.error('Error clearing selected files:', error);
+            const pageItems = selected.filter(it => it.dataset.page);
+            const fileItems = selected.filter(it => it.dataset.id && !it.dataset.page);
+            if (pageItems.length > 0) {
+                pageItems.forEach(it => it.remove());
             }
+            if (fileItems.length > 0) {
+                const ids = fileItems.map(it => it.dataset.id);
+                try {
+                    const response = await fetch('/clear-selected', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ fileIds: ids })
+                    });
+                    if (response.ok) {
+                        fileItems.forEach(it => it.remove());
+                    }
+                } catch (error) {
+                    console.error('Error clearing selected files:', error);
+                }
+            }
+            updateMergeButtonState();
         });
     }
 
@@ -499,6 +522,7 @@ document.addEventListener('DOMContentLoaded', () => {
     mergeBtn.addEventListener('click', async () => {
         async function buildPageItemsFromSelection() {
             const items = [];
+            const fullFileIds = [];
             const nodes = Array.from(fileGrid.querySelectorAll('.file-item'));
             for (let i = 0; i < nodes.length; i++) {
                 const item = nodes[i];
@@ -518,12 +542,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         const rot = getRotationByKey(`${item.dataset.id}@${p}`) || 0;
                         items.push({ filename: item.dataset.id, page: p, rotate: rot });
                     }
+                    fullFileIds.push(item.dataset.id);
                 }
             }
-            return items;
+            return { items, fullFileIds };
         }
 
-        const pageItems = await buildPageItemsFromSelection();
+        const { items: pageItems, fullFileIds } = await buildPageItemsFromSelection();
         if (pageItems.length < 1) return;
 
         showLoading(true);
@@ -538,6 +563,37 @@ document.addEventListener('DOMContentLoaded', () => {
                 const result = await response.json();
                 if (result.success && result.downloadUrl) {
                     showRenameModal(result.downloadUrl, result.filename);
+                    if (autoDeleteChk && autoDeleteChk.checked) {
+                        try {
+                            const all = Array.from(fileGrid.querySelectorAll('.file-item'));
+                            const toRemove = [];
+                            for (const item of all) {
+                                const page = item.dataset.page ? parseInt(item.dataset.page, 10) : null;
+                                const source = item.dataset.source || null;
+                                if (page && source) {
+                                    if (pageItems.find(pi => pi.filename === source && pi.page === page)) {
+                                        toRemove.push(item);
+                                    }
+                                }
+                            }
+                            toRemove.forEach(n => n.remove());
+                            if (fullFileIds && fullFileIds.length > 0) {
+                                const resp = await fetch('/clear-selected', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ fileIds: fullFileIds })
+                                });
+                                if (resp.ok) {
+                                    all.forEach(item => {
+                                        if (item.dataset.id && fullFileIds.includes(item.dataset.id)) item.remove();
+                                    });
+                                }
+                            }
+                            updateMergeButtonState();
+                        } catch (e) {
+                            console.error('auto delete after export failed', e);
+                        }
+                    }
                 } else {
                     alert('合并失败: ' + (result.message || '未知错误'));
                 }
@@ -627,39 +683,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.body.removeChild(a);
     }
 
-    async function expandFileItem(item, url) {
-        const nameEl = item.querySelector('.file-name');
-        const originalName = nameEl ? nameEl.textContent : '';
-        const filename = item.dataset.id;
-        const index = Array.from(fileGrid.children).indexOf(item);
-        const loadingTask = pdfjsLib.getDocument(url);
-        const pdf = await loadingTask.promise;
-        const totalPages = pdf.numPages;
-        const fragment = document.createDocumentFragment();
-        for (let i = 1; i <= totalPages; i++) {
-            const pageItem = document.createElement('div');
-            pageItem.className = 'file-item';
-            pageItem.dataset.source = filename;
-            pageItem.dataset.page = String(i);
-            pageItem.dataset.url = url;
-            pageItem.innerHTML = `
-                <div class="checkbox-container">
-                    <input type="checkbox" class="file-checkbox">
-                </div>
-                <div class="rotate-btn">旋转</div>
-                <div class="thumbnail-container">
-                    <span style="color: #999; font-size: 12px;">生成中...</span>
-                </div>
-                <div class="file-name" title="${originalName} - 第 ${i} 页">${originalName} - 第 ${i} 页</div>
-            `;
-            fragment.appendChild(pageItem);
-            setInitialRotation(pageItem);
-            generateThumbnail(pageItem, url, i, getRotationForItem(pageItem));
-        }
-        fileGrid.insertBefore(fragment, fileGrid.children[index + 1] || null);
-        fileGrid.removeChild(item);
-        updateMergeButtonState();
-    }
+
 
     function getRotationKey(item) {
         const filename = item.dataset.source || item.dataset.id;
