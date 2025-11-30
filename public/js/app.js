@@ -53,8 +53,21 @@ document.addEventListener('DOMContentLoaded', () => {
         onEnd: updateMergeButtonState
     });
 
+    async function initDeletedPages() {
+        try {
+            const res = await fetch('/state');
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.success && data.deletedPages) {
+                    window.__DELETED_PAGES__ = data.deletedPages;
+                }
+            }
+        } catch (e) { }
+    }
+
     // Handle existing files (SSR) by auto-expanding into page items
     (async function () {
+        await initDeletedPages();
         const items = Array.from(document.querySelectorAll('.file-item'));
         for (const item of items) {
             const filename = item.dataset.id;
@@ -68,7 +81,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 const pdf = await loadingTask.promise;
                 const totalPages = pdf.numPages;
                 const fragment = document.createDocumentFragment();
+                const delMap = (window.__DELETED_PAGES__ || {});
+                const delList = Array.isArray(delMap[filename]) ? delMap[filename].map(n => parseInt(n, 10)) : [];
                 for (let i = 1; i <= totalPages; i++) {
+                    if (delList.includes(i)) continue;
                     const pageItem = document.createElement('div');
                     pageItem.className = 'file-item';
                     pageItem.dataset.source = filename;
@@ -248,7 +264,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 const pdf = await loadingTask.promise;
                 const totalPages = pdf.numPages;
                 const fragment = document.createDocumentFragment();
+                const delMap = (window.__DELETED_PAGES__ || {});
+                const delList = Array.isArray(delMap[file.filename]) ? delMap[file.filename].map(n => parseInt(n, 10)) : [];
                 for (let i = 1; i <= totalPages; i++) {
+                    if (delList.includes(i)) continue;
                     const pageItem = document.createElement('div');
                     pageItem.className = 'file-item';
                     pageItem.dataset.source = file.filename;
@@ -489,6 +508,20 @@ document.addEventListener('DOMContentLoaded', () => {
             const pageItems = selected.filter(it => it.dataset.page);
             const fileItems = selected.filter(it => it.dataset.id && !it.dataset.page);
             if (pageItems.length > 0) {
+                try {
+                    const payload = pageItems.map(it => ({ filename: it.dataset.source, page: parseInt(it.dataset.page, 10) }));
+                    await fetch('/clear-pages', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ pages: payload })
+                    });
+                    const delMap = (window.__DELETED_PAGES__ = window.__DELETED_PAGES__ || {});
+                    payload.forEach(p => {
+                        const list = Array.isArray(delMap[p.filename]) ? delMap[p.filename] : [];
+                        if (!list.includes(p.page)) list.push(p.page);
+                        delMap[p.filename] = list;
+                    });
+                } catch (e) { }
                 pageItems.forEach(it => it.remove());
             }
             if (fileItems.length > 0) {
@@ -562,38 +595,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (response.ok) {
                 const result = await response.json();
                 if (result.success && result.downloadUrl) {
-                    showRenameModal(result.downloadUrl, result.filename);
-                    if (autoDeleteChk && autoDeleteChk.checked) {
-                        try {
-                            const all = Array.from(fileGrid.querySelectorAll('.file-item'));
-                            const toRemove = [];
-                            for (const item of all) {
-                                const page = item.dataset.page ? parseInt(item.dataset.page, 10) : null;
-                                const source = item.dataset.source || null;
-                                if (page && source) {
-                                    if (pageItems.find(pi => pi.filename === source && pi.page === page)) {
-                                        toRemove.push(item);
-                                    }
-                                }
-                            }
-                            toRemove.forEach(n => n.remove());
-                            if (fullFileIds && fullFileIds.length > 0) {
-                                const resp = await fetch('/clear-selected', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ fileIds: fullFileIds })
-                                });
-                                if (resp.ok) {
-                                    all.forEach(item => {
-                                        if (item.dataset.id && fullFileIds.includes(item.dataset.id)) item.remove();
-                                    });
-                                }
-                            }
-                            updateMergeButtonState();
-                        } catch (e) {
-                            console.error('auto delete after export failed', e);
-                        }
-                    }
+                    showRenameModal(result.downloadUrl, result.filename, { pageItems, fullFileIds });
                 } else {
                     alert('合并失败: ' + (result.message || '未知错误'));
                 }
@@ -612,7 +614,7 @@ document.addEventListener('DOMContentLoaded', () => {
         spinner.style.display = show ? 'block' : 'none';
     }
 
-    function showRenameModal(downloadUrl, defaultFilename) {
+    function showRenameModal(downloadUrl, defaultFilename, deletionPlan) {
         const modal = document.getElementById('rename-modal');
         const buttons = document.querySelectorAll('.template-btn');
         const timesInput = document.getElementById('rename-times');
@@ -664,9 +666,54 @@ document.addEventListener('DOMContentLoaded', () => {
             triggerDownload(downloadUrl, `${ts}.pdf`);
             modal.style.display = 'none';
         };
-        renameBtn.onclick = function () {
+        renameBtn.onclick = async function () {
             const name = buildName() + '.pdf';
             triggerDownload(downloadUrl, name);
+            if (autoDeleteChk && autoDeleteChk.checked && deletionPlan) {
+                try {
+                    const { pageItems, fullFileIds } = deletionPlan;
+                    const pagesPayload = Array.isArray(pageItems) ? pageItems.map(pi => ({ filename: pi.filename, page: pi.page })) : [];
+                    if (pagesPayload.length > 0) {
+                        await fetch('/clear-pages', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ pages: pagesPayload })
+                        });
+                        const delMap = (window.__DELETED_PAGES__ = window.__DELETED_PAGES__ || {});
+                        pagesPayload.forEach(p => {
+                            const list = Array.isArray(delMap[p.filename]) ? delMap[p.filename] : [];
+                            if (!list.includes(p.page)) list.push(p.page);
+                            delMap[p.filename] = list;
+                        });
+                        const all = Array.from(fileGrid.querySelectorAll('.file-item'));
+                        all.forEach(item => {
+                            const page = item.dataset.page ? parseInt(item.dataset.page, 10) : null;
+                            const source = item.dataset.source || null;
+                            if (page && source) {
+                                if (pagesPayload.find(pi => pi.filename === source && pi.page === page)) {
+                                    item.remove();
+                                }
+                            }
+                        });
+                    }
+                    if (Array.isArray(fullFileIds) && fullFileIds.length > 0) {
+                        const resp = await fetch('/clear-selected', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ fileIds: fullFileIds })
+                        });
+                        if (resp.ok) {
+                            const all = Array.from(fileGrid.querySelectorAll('.file-item'));
+                            all.forEach(item => {
+                                if (item.dataset.id && fullFileIds.includes(item.dataset.id)) item.remove();
+                            });
+                        }
+                    }
+                    updateMergeButtonState();
+                } catch (e) {
+                    console.error('auto delete after export failed', e);
+                }
+            }
             modal.style.display = 'none';
         };
 
@@ -700,4 +747,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const key = getRotationKey(item);
         if (!rotationMap.has(key)) rotationMap.set(key, 0);
     }
+
+    window.addEventListener('beforeunload', () => {
+        try {
+            if (navigator.sendBeacon) {
+                navigator.sendBeacon('/clear');
+            } else {
+                fetch('/clear', { method: 'POST', keepalive: true });
+            }
+        } catch (e) { }
+    });
 });

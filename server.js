@@ -111,7 +111,10 @@ app.get('/', (req, res) => {
     if (!req.session.files) {
         req.session.files = [];
     }
-    res.render('index', { files: req.session.files });
+    if (!req.session.deletedPages) {
+        req.session.deletedPages = {};
+    }
+    res.render('index', { files: req.session.files, deletedPages: req.session.deletedPages });
 });
 
 app.post('/upload', (req, res, next) => {
@@ -184,6 +187,7 @@ app.post('/clear', (req, res) => {
         }
     }
     req.session.files = [];
+    req.session.deletedPages = {};
     res.json({ success: true });
 });
 
@@ -208,6 +212,32 @@ app.post('/clear-selected', express.json(), (req, res) => {
     }
     req.session.files = sessionFiles.filter(f => !fileIds.includes(f.filename));
     return res.json({ success: true, deleted });
+});
+
+app.post('/clear-pages', express.json(), (req, res) => {
+    const { pages } = req.body || {};
+    if (!Array.isArray(pages) || pages.length === 0) {
+        return res.status(400).json({ success: false, message: '未选择页。' });
+    }
+    if (!req.session.deletedPages) req.session.deletedPages = {};
+    let updated = 0;
+    for (const p of pages) {
+        if (!p || !p.filename || typeof p.page !== 'number') continue;
+        const key = p.filename;
+        const list = Array.isArray(req.session.deletedPages[key]) ? req.session.deletedPages[key] : [];
+        if (!list.includes(p.page)) {
+            list.push(p.page);
+            req.session.deletedPages[key] = list;
+            updated += 1;
+        }
+    }
+    return res.json({ success: true, updated });
+});
+
+app.get('/state', (req, res) => {
+    const files = Array.isArray(req.session.files) ? req.session.files : [];
+    const deletedPages = req.session.deletedPages || {};
+    res.json({ success: true, filesCount: files.length, deletedPages });
 });
 
 app.post('/merge', express.json(), async (req, res) => {
