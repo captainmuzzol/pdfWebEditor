@@ -11,6 +11,41 @@ document.addEventListener('DOMContentLoaded', () => {
     const spinner = document.getElementById('loading-spinner');
     const rotationMap = new Map();
 
+    function supportsWorker() {
+        try {
+            const blob = new Blob([''], { type: 'application/javascript' });
+            const url = URL.createObjectURL(blob);
+            const w = new Worker(url);
+            w.terminate();
+            URL.revokeObjectURL(url);
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    if (!supportsWorker()) {
+        try { pdfjsLib.disableWorker = true; } catch (e) { }
+    }
+
+    async function getPdfDocument(url) {
+        try {
+            return await pdfjsLib.getDocument({ url }).promise;
+        } catch (e1) {
+            try {
+                return await pdfjsLib.getDocument({ url, disableRange: true, disableStream: true, nativeImageDecoderSupport: 'none' }).promise;
+            } catch (e2) {
+                try {
+                    const res = await fetch(url);
+                    const buf = await res.arrayBuffer();
+                    return await pdfjsLib.getDocument({ data: buf, disableFontFace: true, nativeImageDecoderSupport: 'none' }).promise;
+                } catch (e3) {
+                    throw e3;
+                }
+            }
+        }
+    }
+
     // Initialize Sortable
     new Sortable(fileGrid, {
         animation: 150,
@@ -192,31 +227,76 @@ document.addEventListener('DOMContentLoaded', () => {
     // Thumbnail Generation
     async function generateThumbnail(container, url, pageNumber, rotationDeg) {
         try {
-            const loadingTask = pdfjsLib.getDocument(url);
-            const pdf = await loadingTask.promise;
+            const pdf = await getPdfDocument(url);
             const numPages = pdf.numPages;
             const page = await pdf.getPage(pageNumber || 1);
-
-            const scale = 1.1;
-            const viewport = page.getViewport({ scale: scale, rotation: (rotationDeg || 0) });
-
-            // Prepare canvas
-            const canvas = document.createElement('canvas');
-            const context = canvas.getContext('2d');
-            canvas.height = viewport.height;
-            canvas.width = viewport.width;
-
-            // Render
-            const renderContext = {
-                canvasContext: context,
-                viewport: viewport
-            };
-            await page.render(renderContext).promise;
-
-            // Replace loader with canvas
             const thumbContainer = container.querySelector('.thumbnail-container');
+            const areaW = Math.max(180, thumbContainer.clientWidth || container.clientWidth || 200);
+            const areaH = Math.max(180, thumbContainer.clientHeight || 220);
+            const topH = areaH;
+            const dpr = window.devicePixelRatio || 1;
+
+            const rotation = (rotationDeg || 0);
+            const baseViewport = page.getViewport({ scale: 1, rotation: rotation });
+            // 仅显示上半视图，不再计算完整视图比例
+
+            // 计算满足清晰度的放大比例：保证源图裁剪区域至少是目标输出的 4 倍像素
+            const oversample = 4;
+            const topOutW = Math.floor(areaW * dpr);
+            const topOutH = Math.floor(topH * dpr);
+            const reqByW = (topOutW * oversample) / baseViewport.width;
+            const reqByH = (topOutH * oversample * 2) / baseViewport.height; // 乘以2，因为裁剪的是上半部分
+            let scaleLarge = Math.max(reqByW, reqByH) * 1.2; // 额外再放大 20%
+            // 上限保护，避免过度渲染导致内存问题
+            scaleLarge = Math.min(scaleLarge, 6.0);
+
+            // 高分辨率离屏渲染（上半视图），带回退保护
+            let largeCanvas, largeCtx;
+            try {
+                const largeViewport = page.getViewport({ scale: scaleLarge * dpr, rotation: rotation });
+                largeCanvas = document.createElement('canvas');
+                largeCtx = largeCanvas.getContext('2d');
+                largeCanvas.width = Math.floor(largeViewport.width);
+                largeCanvas.height = Math.floor(largeViewport.height);
+                await page.render({ canvasContext: largeCtx, viewport: largeViewport }).promise;
+            } catch (e) {
+                // 回退到较小比例，保证基本可用
+                const fallbackScale = 3.0;
+                const largeViewport = page.getViewport({ scale: fallbackScale * dpr, rotation: rotation });
+                largeCanvas = document.createElement('canvas');
+                largeCtx = largeCanvas.getContext('2d');
+                largeCanvas.width = Math.floor(largeViewport.width);
+                largeCanvas.height = Math.floor(largeViewport.height);
+                await page.render({ canvasContext: largeCtx, viewport: largeViewport }).promise;
+            }
+
+            // 不再渲染完整视图（移除下半缩略图）
+
+            // 顶部视图（裁剪上半部分，避免糊）
+            const topCanvas = document.createElement('canvas');
+            const topCtx = topCanvas.getContext('2d');
+            topCanvas.width = Math.floor(areaW * dpr);
+            topCanvas.height = Math.floor(topH * dpr);
+            topCanvas.style.width = '100%';
+            // 顶部视图禁用平滑，增强文字清晰度
+            topCtx.imageSmoothingEnabled = false;
+            const cropH = Math.floor(largeCanvas.height / 2); // 裁剪上半部分
+            topCtx.drawImage(
+                largeCanvas,
+                0,
+                0,
+                largeCanvas.width,
+                cropH,
+                0,
+                0,
+                topCanvas.width,
+                topCanvas.height
+            );
+
+            // 移除下半视图
+
             thumbContainer.innerHTML = '';
-            thumbContainer.appendChild(canvas);
+            thumbContainer.appendChild(topCanvas);
             if (!pageNumber && numPages > 1) {
                 const existing = container.querySelector('.expand-btn');
                 if (!existing) {
@@ -245,8 +325,7 @@ document.addEventListener('DOMContentLoaded', () => {
         container.innerHTML = '<div class="loader" style="display:block; margin: 50px auto;"></div>';
 
         try {
-            const loadingTask = pdfjsLib.getDocument(url);
-            const pdf = await loadingTask.promise;
+            const pdf = await getPdfDocument(url);
             let currentPage = initialPage || 1;
             const totalPages = pdf.numPages;
 
@@ -291,7 +370,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const filename = url.split('/').pop();
                 for (let i = 1; i <= totalPages; i++) {
                     const page = await pdf.getPage(i);
-                    const scale = 1.2;
+                    const scale = 1.0;
                     const rot = getRotationByKey(`${filename}@${i}`) || 0;
                     const viewport = page.getViewport({ scale: scale, rotation: rot });
                     const canvas = document.createElement('canvas');
