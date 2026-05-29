@@ -21,7 +21,8 @@ const logger = winston.createLogger({
 
 const app = express();
 const PORT = process.env.PORT || 8712;
-const MAX_UPLOAD_MB = parseInt(process.env.MAX_UPLOAD_MB || '200', 10);
+const MAX_UPLOAD_MB = parseInt(process.env.MAX_UPLOAD_MB || '50', 10);
+const UNLOCK_PASSWORD = process.env.UNLOCK_PASSWORD || 'wljcy123!@#';
 
 // Session setup
 app.use(session({
@@ -94,17 +95,13 @@ const storage = multer.diskStorage({
     }
 });
 
-const upload = multer({
-    storage: storage,
-    fileFilter: (req, file, cb) => {
-        if (file.mimetype === 'application/pdf') {
-            cb(null, true);
-        } else {
-            cb(null, false);
-        }
-    },
-    limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024 }
-});
+function pdfFileFilter(req, file, cb) {
+    if (file.mimetype === 'application/pdf') {
+        cb(null, true);
+    } else {
+        cb(null, false);
+    }
+}
 
 // Routes
 app.get('/', (req, res) => {
@@ -118,7 +115,9 @@ app.get('/', (req, res) => {
 });
 
 app.post('/upload', (req, res, next) => {
-    upload.array('files')(req, res, (err) => {
+    const limits = (req.session && req.session.unlimitedMode) ? {} : { fileSize: MAX_UPLOAD_MB * 1024 * 1024 };
+    const dynamicUpload = multer({ storage, fileFilter: pdfFileFilter, limits });
+    dynamicUpload.array('files')(req, res, (err) => {
         if (err instanceof multer.MulterError) {
             logger.error(`Multer Error: ${err.message}`);
             if (err.code === 'LIMIT_FILE_SIZE') {
@@ -237,7 +236,23 @@ app.post('/clear-pages', express.json(), (req, res) => {
 app.get('/state', (req, res) => {
     const files = Array.isArray(req.session.files) ? req.session.files : [];
     const deletedPages = req.session.deletedPages || {};
-    res.json({ success: true, filesCount: files.length, deletedPages });
+    const unlimitedMode = !!(req.session && req.session.unlimitedMode);
+    res.json({ success: true, filesCount: files.length, deletedPages, unlimitedMode, maxUploadMB: MAX_UPLOAD_MB });
+});
+
+app.post('/unlock', express.json(), (req, res) => {
+    const { password } = req.body || {};
+    if (!UNLOCK_PASSWORD) {
+        return res.status(500).json({ success: false, message: '未配置密码' });
+    }
+    if (typeof password !== 'string' || password.length === 0) {
+        return res.status(400).json({ success: false, message: '请输入密码' });
+    }
+    if (password === UNLOCK_PASSWORD) {
+        req.session.unlimitedMode = true;
+        return res.json({ success: true, message: '已解除限制' });
+    }
+    return res.status(403).json({ success: false, message: '密码错误' });
 });
 
 app.post('/merge', express.json(), async (req, res) => {

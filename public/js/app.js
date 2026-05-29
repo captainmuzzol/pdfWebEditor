@@ -10,6 +10,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const autoDeleteChk = document.getElementById('auto-delete-after-export');
     const spinner = document.getElementById('loading-spinner');
     const rotationMap = new Map();
+    const PAGE_LIMIT = 50;
+    let lastCheckedCount = 0;
+    const zoomBaseBtn = document.getElementById('zoom-base');
+    const zoom2xBtn = document.getElementById('zoom-2x');
+    const zoom06xBtn = document.getElementById('zoom-06x');
+    const unlockBtn = document.getElementById('unlock-mode');
+    let unlimitedMode = false;
 
     function supportsWorker() {
         try {
@@ -53,16 +60,98 @@ document.addEventListener('DOMContentLoaded', () => {
         onEnd: updateMergeButtonState
     });
 
+    function clearScales() {
+        document.body.classList.remove('scale-2x', 'scale-06x');
+    }
+    if (zoomBaseBtn) {
+        zoomBaseBtn.addEventListener('click', () => {
+            clearScales();
+            requestAnimationFrame(() => {
+                const items = Array.from(fileGrid.querySelectorAll('.file-item'));
+                for (let i = 0; i < items.length; i++) {
+                    const item = items[i];
+                    const url = item.dataset.url;
+                    const page = item.dataset.page ? parseInt(item.dataset.page, 10) : undefined;
+                    const rot = getRotationForItem(item);
+                    if (url) generateThumbnail(item, url, page, rot);
+                }
+            });
+        });
+    }
+    if (zoom2xBtn) {
+        zoom2xBtn.addEventListener('click', () => {
+            clearScales();
+            document.body.classList.add('scale-2x');
+            requestAnimationFrame(() => {
+                const items = Array.from(fileGrid.querySelectorAll('.file-item'));
+                for (let i = 0; i < items.length; i++) {
+                    const item = items[i];
+                    const url = item.dataset.url;
+                    const page = item.dataset.page ? parseInt(item.dataset.page, 10) : undefined;
+                    const rot = getRotationForItem(item);
+                    if (url) generateThumbnail(item, url, page, rot);
+                }
+            });
+        });
+    }
+    if (zoom06xBtn) {
+        zoom06xBtn.addEventListener('click', () => {
+            clearScales();
+            document.body.classList.add('scale-06x');
+            requestAnimationFrame(() => {
+                const items = Array.from(fileGrid.querySelectorAll('.file-item'));
+                for (let i = 0; i < items.length; i++) {
+                    const item = items[i];
+                    const url = item.dataset.url;
+                    const page = item.dataset.page ? parseInt(item.dataset.page, 10) : undefined;
+                    const rot = getRotationForItem(item);
+                    if (url) generateThumbnail(item, url, page, rot);
+                }
+            });
+        });
+    }
+
     async function initDeletedPages() {
         try {
             const res = await fetch('/state');
             if (res.ok) {
                 const data = await res.json();
-                if (data && data.success && data.deletedPages) {
-                    window.__DELETED_PAGES__ = data.deletedPages;
+                if (data && data.success) {
+                    if (data.deletedPages) window.__DELETED_PAGES__ = data.deletedPages;
+                    unlimitedMode = !!data.unlimitedMode;
+                    window.__UNLIMITED__ = unlimitedMode;
+                    if (unlockBtn && unlimitedMode) {
+                        unlockBtn.textContent = '已解除限制';
+                        unlockBtn.classList.add('btn-success');
+                    }
                 }
             }
         } catch (e) { }
+    }
+
+    if (unlockBtn) {
+        unlockBtn.addEventListener('click', async () => {
+            const pwd = prompt('请输入密码以解除限制');
+            if (!pwd) return;
+            try {
+                const res = await fetch('/unlock', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: pwd })
+                });
+                const data = await res.json();
+                if (res.ok && data && data.success) {
+                    unlimitedMode = true;
+                    window.__UNLIMITED__ = true;
+                    unlockBtn.textContent = '已解除限制';
+                    unlockBtn.classList.add('btn-success');
+                } else {
+                    alert(data && data.message ? data.message : '解除限制失败');
+                }
+            } catch (e) {
+                alert('解除限制失败');
+            }
+        });
     }
 
     // Handle existing files (SSR) by auto-expanding into page items
@@ -242,6 +331,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const result = await response.json();
             if (result.success) {
+                if (!unlimitedMode) {
+                    let totalPages = 0;
+                    try {
+                        for (let i = 0; i < result.files.length; i++) {
+                            const f = result.files[i];
+                            const pdf = await getPdfDocument(f.url);
+                            totalPages += pdf.numPages;
+                            if (totalPages > PAGE_LIMIT) break;
+                        }
+                    } catch (e) { }
+                    if (totalPages > PAGE_LIMIT) {
+                        alert('服务器性能原因，禁止PDF上传超过 50 页。');
+                        try { await fetch('/clear', { method: 'POST' }); } catch (e) { }
+                        return;
+                    }
+                }
                 appendFilesToGrid(result.files);
             } else {
                 alert('上传失败: ' + (result.message || '未知错误'));
@@ -312,7 +417,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // 仅显示上半视图，不再计算完整视图比例
 
             // 计算满足清晰度的放大比例：保证源图裁剪区域至少是目标输出的 4 倍像素
-            const oversample = 4;
+            const oversample = document.body.classList.contains('scale-2x') ? 6 : 4;
             const topOutW = Math.floor(areaW * dpr);
             const topOutH = Math.floor(topH * dpr);
             const reqByW = (topOutW * oversample) / baseViewport.width;
@@ -489,10 +594,45 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     function updateMergeButtonState() {
+        const fileCount = document.querySelectorAll('#file-grid .file-item').length;
         const checkedCount = document.querySelectorAll('.file-checkbox:checked').length;
-        mergeBtn.disabled = checkedCount < 1;
-        mergeBtn.innerText = checkedCount > 0 ? `合并导出 ${checkedCount} 个条目` : '合并导出选中条目';
+        lastCheckedCount = checkedCount;
+        if (fileCount < 1) {
+            mergeBtn.disabled = true;
+            const lbl = document.getElementById('merge-label');
+            if (lbl) lbl.textContent = '请上传PDF';
+        } else if (checkedCount < 1) {
+            mergeBtn.disabled = true;
+            const lbl = document.getElementById('merge-label');
+            if (lbl) lbl.textContent = '请勾选条目';
+        } else {
+            mergeBtn.disabled = false;
+            const lbl = document.getElementById('merge-label');
+            if (lbl) lbl.textContent = '导出';
+        }
+        const badge = document.getElementById('merge-count-badge');
+        if (badge) {
+            if (checkedCount > 0) {
+                badge.textContent = String(checkedCount);
+                badge.style.display = 'inline-flex';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
     }
+
+    mergeBtn.addEventListener('mouseenter', () => {
+        if (!mergeBtn.disabled) {
+            const lbl = document.getElementById('merge-label');
+            if (lbl) lbl.textContent = `合并并导出${lastCheckedCount}个条目`;
+        }
+    });
+    mergeBtn.addEventListener('mouseleave', () => {
+        if (!mergeBtn.disabled) {
+            const lbl = document.getElementById('merge-label');
+            if (lbl) lbl.textContent = '导出';
+        }
+    });
 
     if (clearSelectedBtn) {
         clearSelectedBtn.addEventListener('click', async () => {
@@ -617,9 +757,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function showRenameModal(downloadUrl, defaultFilename, deletionPlan) {
         const modal = document.getElementById('rename-modal');
         const buttons = document.querySelectorAll('.template-btn');
-        const timesInput = document.getElementById('rename-times');
         const extraInput = document.getElementById('rename-extra');
-        const freeInput = document.getElementById('rename-free');
         const previewEl = document.getElementById('rename-preview');
         const timeBtn = document.getElementById('download-time');
         const renameBtn = document.getElementById('download-rename');
@@ -627,20 +765,9 @@ document.addEventListener('DOMContentLoaded', () => {
         let selectedTemplate = '';
 
         function buildName() {
-            const free = (freeInput && freeInput.value ? freeInput.value : '').trim();
-            if (free) {
-                const name = free.replace(/\.pdf$/i, '').trim();
-                previewEl.textContent = name || '未选择';
-                return name || defaultFilename || `合并文件`;
-            }
-            const parts = [];
-            if (selectedTemplate) parts.push(selectedTemplate);
-            const tVal = parseInt(timesInput.value, 10);
-            const t = isNaN(tVal) ? 0 : Math.max(0, tVal);
-            if (t > 0) parts.push(`第${t}次`);
             const extra = (extraInput.value || '').trim();
-            if (extra) parts.push(extra);
-            const name = parts.join('-');
+            const type = selectedTemplate || '';
+            const name = `${extra}${type}`.trim();
             previewEl.textContent = name || '未选择';
             return name || defaultFilename || `合并文件`;
         }
@@ -654,9 +781,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 buildName();
             };
         });
-        timesInput.oninput = buildName;
         extraInput.oninput = buildName;
-        if (freeInput) freeInput.oninput = buildName;
         buildName();
 
         timeBtn.onclick = function () {

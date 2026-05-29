@@ -120,9 +120,9 @@
         }
 
         .template-btn.active {
-            background: #0d6efd !important;
+            background: #198754 !important;
             color: #fff !important;
-            border-color: #0d6efd !important;
+            border-color: #198754 !important;
         }
 
         .btn {
@@ -157,6 +157,90 @@
 
         .btn-danger {
             background-color: #dc3545;
+        }
+
+        .merge-fab {
+            position: fixed;
+            left: 50%;
+            bottom: 24px;
+            transform: translateX(-50%);
+            border-radius: 999px;
+            padding: 17px 34px;
+            font-weight: 600;
+            font-size: 20px;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            z-index: 1100;
+            transition: padding 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+        }
+
+        .merge-fab:disabled {
+            background: #adb5bd;
+            color: #fff;
+            cursor: not-allowed;
+        }
+
+        .merge-fab:not(:disabled) {
+            background: #28a745;
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(40, 167, 69, 0.35);
+        }
+
+        .merge-fab:not(:disabled):hover {
+            padding: 17px 45px;
+        }
+
+        .count-badge {
+            position: absolute;
+            top: -10px;
+            right: -10px;
+            min-width: 28px;
+            height: 28px;
+            padding: 0 6px;
+            border-radius: 999px;
+            background: #dc3545;
+            color: #fff;
+            font-size: 14px;
+            font-weight: 700;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .zoom-bar {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            z-index: 1100;
+            display: flex;
+            gap: 6px;
+        }
+
+        .unlock-bar {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            z-index: 1100;
+            display: flex;
+            gap: 6px;
+        }
+
+        .scale-2x .grid {
+            grid-template-columns: repeat(auto-fill, minmax(560px, 1fr));
+        }
+
+        .scale-2x .thumbnail-container {
+            height: 360px;
+        }
+
+
+        .scale-06x .grid {
+            grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+        }
+
+        .scale-06x .thumbnail-container {
+            height: 108px;
         }
 
         .grid {
@@ -321,6 +405,14 @@
 </head>
 
 <body>
+    <div class="unlock-bar">
+        <button class="btn" id="unlock-mode">解除限制</button>
+    </div>
+    <div class="zoom-bar">
+        <button class="btn" id="zoom-base">初始</button>
+        <button class="btn" id="zoom-2x">2x</button>
+        <button class="btn" id="zoom-06x">0.6x</button>
+    </div>
     <div class="container">
         <div class="header">
             <h1> 温岭检察PDF便捷编辑器</h1>
@@ -341,7 +433,7 @@
                     <div class="merge-holder" style="display: flex; align-items: center; gap: 8px; margin-left:auto;">
                         <div class="loader" id="loading-spinner"></div>
                         <button class="btn btn-warning" id="reverse-sort">反向排序</button>
-                        <button class="btn btn-merge" id="merge-btn" disabled>合并导出选中条目</button>
+
                         <label style="display:flex;align-items:center;gap:6px;margin-left:8px;">
                             <input type="checkbox" id="auto-delete-after-export" checked>
                             <span style="color:#333;">导出后删除</span>
@@ -374,6 +466,10 @@
                 <% }); %>
         </div>
     </div>
+    <button class="btn merge-fab" id="merge-btn" disabled>
+        <span id="merge-label">请上传PDF</span>
+        <span class="count-badge" id="merge-count-badge">0</span>
+    </button>
 
     <!-- Preview Modal -->
     <div id="preview-modal" class="modal">
@@ -394,19 +490,12 @@
             <span class="close" onclick="document.getElementById('rename-modal').style.display='none'">&times;</span>
             <h3 style="margin-top:0;">重命名并下载</h3>
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0;">
+                <input type="text" id="rename-extra" placeholder="嫌疑人姓名" style="flex:1;padding:6px;">
                 <div id="template-buttons" style="display:flex;gap:8px;">
                     <button type="button" class="btn template-btn" data-value="讯问笔录">讯问笔录</button>
                     <button type="button" class="btn template-btn" data-value="提讯证">提讯证</button>
                     <button type="button" class="btn template-btn" data-value="具结书">具结书</button>
                 </div>
-                <div style="display:flex;align-items:center;gap:6px;">
-                    <span>第</span>
-                    <input type="number" id="rename-times" value="1" min="0" step="1" inputmode="numeric"
-                        pattern="[0-9]*" style="width:60px;padding:6px;">
-                    <span>次</span>
-                </div>
-                <input type="text" id="rename-extra" placeholder="嫌疑人姓名" style="flex:1;padding:6px;">
-                <input type="text" id="rename-free" placeholder="自由重命名（不含扩展名）" style="flex:1;padding:6px;">
             </div>
             <div style="margin:10px 0;color:#555;">文件名预览：<span id="rename-preview">未选择</span>.pdf</div>
             <div style="display:flex;gap:10px;justify-content:flex-end;">
